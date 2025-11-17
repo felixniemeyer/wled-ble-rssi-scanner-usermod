@@ -87,25 +87,50 @@ Configuration can be set via WLED's usermod config interface or by editing `cfg.
 
 ## API Endpoints
 
-### Start Scan: `GET /api/ble-rssi-scan`
+### Start Scan: `GET /api/ble-rssi-start`
 
-Starts a BLE RSSI scan or returns results if a scan was previously completed.
+Starts a new BLE RSSI scan. Returns immediately while scan runs in background.
 
 **Query Parameters:**
-- `duration` (optional): Override scan duration in seconds (1-300)
+- `duration` (optional): Override scan duration in seconds (1-300, default: 10)
 
-**Response (Scan Started - HTTP 202):**
+**Response (Started - HTTP 200):**
+```json
+{
+  "status": "started",
+  "duration_sec": 10,
+  "message": "BLE scan started. Call /api/ble-rssi-results after 10 seconds."
+}
+```
+
+**Response (Already Scanning - HTTP 409):**
+```json
+{
+  "status": "already_scanning",
+  "message": "Scan already in progress"
+}
+```
+
+### Get Results: `GET /api/ble-rssi-results`
+
+Gets the current scan status and results.
+
+**Response (Still Scanning - HTTP 200):**
 ```json
 {
   "status": "scanning",
-  "duration_sec": 15,
-  "message": "BLE scan started. Call this endpoint again after 15 seconds to get results."
+  "elapsed_sec": 5,
+  "remaining_sec": 5,
+  "devices_found": 2
 }
 ```
 
 **Response (Scan Complete - HTTP 200):**
 ```json
 {
+  "status": "complete",
+  "scan_duration_sec": 10,
+  "device_count": 2,
   "devices": [
     {
       "name": "WLED-Device1",
@@ -117,35 +142,15 @@ Starts a BLE RSSI scan or returns results if a scan was previously completed.
       "rssi_avg": -78.2,
       "sample_count": 98
     }
-  ],
-  "scan_duration_sec": 15,
-  "device_count": 2
+  ]
 }
 ```
 
-### Get Results: `GET /api/ble-rssi-results`
-
-Retrieves the results of the last completed scan without starting a new one.
-
-**Response (HTTP 200):**
+**Response (No Data - HTTP 200):**
 ```json
 {
-  "devices": [
-    {
-      "name": "WLED-Device1",
-      "rssi_avg": -65.4,
-      "sample_count": 142
-    }
-  ],
-  "scan_duration_sec": 15,
-  "device_count": 1
-}
-```
-
-**Response (No Data - HTTP 404):**
-```json
-{
-  "error": "No scan data available"
+  "status": "no_data",
+  "message": "No scan data available. Call /api/ble-rssi-start first."
 }
 ```
 
@@ -153,14 +158,14 @@ Retrieves the results of the last completed scan without starting a new one.
 
 ### Basic Usage
 
-1. **Trigger scan on all devices** (from your client application):
+1. **Start scan on all devices** (from your client application):
    ```bash
-   curl http://wled-device1.local/api/ble-rssi-scan
-   curl http://wled-device2.local/api/ble-rssi-scan
-   curl http://wled-device3.local/api/ble-rssi-scan
+   curl http://wled-device1.local/api/ble-rssi-start
+   curl http://wled-device2.local/api/ble-rssi-start
+   curl http://wled-device3.local/api/ble-rssi-start
    ```
 
-2. **Wait for scan duration** (e.g., 15 seconds)
+2. **Wait for scan duration** (e.g., 10 seconds)
 
 3. **Retrieve results**:
    ```bash
@@ -169,11 +174,26 @@ Retrieves the results of the last completed scan without starting a new one.
    curl http://wled-device3.local/api/ble-rssi-results
    ```
 
+### Using the Test Script
+
+A test script is included that automates the scan process:
+
+```bash
+cd usermods/ble_rssi_scanner
+./test_scan.sh 192.168.1.100      # Use default 10s duration
+./test_scan.sh 192.168.1.100 15   # Use custom 15s duration
+```
+
+The script will:
+- Start the scan
+- Poll for status every 2 seconds
+- Display progress and final results
+
 ### Custom Scan Duration
 
 Trigger a 30-second scan:
 ```bash
-curl "http://wled-device1.local/api/ble-rssi-scan?duration=30"
+curl "http://wled-device1.local/api/ble-rssi-start?duration=30"
 ```
 
 ### Python Example

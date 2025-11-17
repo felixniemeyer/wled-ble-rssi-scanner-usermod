@@ -4,9 +4,9 @@
 
 #ifdef ESP32
 
-#include <BLEDevice.h>
-#include <BLEAdvertising.h>
-#include <BLEScan.h>
+#include <NimBLEDevice.h>
+#include <NimBLEAdvertising.h>
+#include <NimBLEScan.h>
 #include <map>
 #include <vector>
 #include <string>
@@ -24,8 +24,8 @@ private:
   uint32_t scanStartTime;
   uint32_t scanDurationSec;
 
-  BLEScan* pBLEScan;
-  BLEAdvertising* pAdvertising;
+  NimBLEScan* pBLEScan;
+  NimBLEAdvertising* pAdvertising;
 
   // Store RSSI samples: device name -> vector of RSSI values
   std::map<std::string, std::vector<int>> rssiSamples;
@@ -40,6 +40,8 @@ private:
   void stopScan();
   String getResultsJSON();
   void registerHTTPHandler();
+  void logToFile(const char* message);
+  String getLogContents();
 
 public:
   BLERSSIScannerUsermod();

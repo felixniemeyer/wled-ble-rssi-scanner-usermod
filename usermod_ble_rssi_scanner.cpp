@@ -2,25 +2,42 @@
 
 #ifdef ESP32
 
+#include <LittleFS.h>
+
+#define LOG_FILE "/ble_rssi.log"
+#define MAX_LOG_SIZE 8192  // Keep log under 8KB
+
 // Callback for BLE scan results
-class BLERSSIScannerUsermod::ScanCallback : public BLEAdvertisedDeviceCallbacks {
+class BLERSSIScannerUsermod::ScanCallback : public NimBLEAdvertisedDeviceCallbacks {
 private:
   BLERSSIScannerUsermod* parent;
 
 public:
   ScanCallback(BLERSSIScannerUsermod* p) : parent(p) {}
 
-  void onResult(BLEAdvertisedDevice advertisedDevice) {
+  void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
+    // Log that callback was triggered
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Callback triggered! Device detected");
+    parent->logToFile(msg);
+
     // Only collect data if scan is in progress
-    if (!parent->scanInProgress) return;
+    if (!parent->scanInProgress) {
+      parent->logToFile("  -> Scan not in progress, ignoring");
+      return;
+    }
 
-    // Check if device has a name
-    if (!advertisedDevice.haveName()) return;
+    // Log device info even without name
+    std::string deviceName = advertisedDevice->haveName() ?
+                             advertisedDevice->getName() :
+                             std::string("NO_NAME_") + advertisedDevice->getAddress().toString();
+    int rssi = advertisedDevice->getRSSI();
 
-    std::string deviceName = advertisedDevice.getName();
-    int rssi = advertisedDevice.getRSSI();
+    snprintf(msg, sizeof(msg), "  -> Device: %s, RSSI: %d, hasName: %d",
+             deviceName.c_str(), rssi, advertisedDevice->haveName());
+    parent->logToFile(msg);
 
-    // Store RSSI sample
+    // Store RSSI sample (now includes devices without names for debugging)
     parent->rssiSamples[deviceName].push_back(rssi);
 
     DEBUG_PRINTF_P(PSTR("BLE RSSI: Found device '%s' with RSSI: %d\n"),
@@ -47,38 +64,117 @@ BLERSSIScannerUsermod::~BLERSSIScannerUsermod() {
   }
 }
 
+void BLERSSIScannerUsermod::logToFile(const char* message) {
+  File logFile = LittleFS.open(LOG_FILE, "a");
+  if (!logFile) return;
+
+  // Check file size and truncate if too large
+  if (logFile.size() > MAX_LOG_SIZE) {
+    logFile.close();
+    LittleFS.remove(LOG_FILE);
+    logFile = LittleFS.open(LOG_FILE, "w");
+  }
+
+  char timestamp[32];
+  snprintf(timestamp, sizeof(timestamp), "[%lu] ", millis());
+  logFile.print(timestamp);
+  logFile.println(message);
+  logFile.close();
+}
+
+String BLERSSIScannerUsermod::getLogContents() {
+  File logFile = LittleFS.open(LOG_FILE, "r");
+  if (!logFile) return "Log file not found";
+
+  String contents = logFile.readString();
+  logFile.close();
+  return contents;
+}
+
 void BLERSSIScannerUsermod::initBLE() {
   if (bleInitialized) return;
 
+  logToFile("=== BLE Init Started ===");
   DEBUG_PRINTLN(F("BLE RSSI Scanner: Initializing BLE"));
 
+  char heapMsg[64];
+  snprintf(heapMsg, sizeof(heapMsg), "Free heap before init: %d bytes", ESP.getFreeHeap());
+  logToFile(heapMsg);
+  DEBUG_PRINTF_P(PSTR("Free heap before BLE init: %d bytes\n"), ESP.getFreeHeap());
+
+  // Check if we have enough free memory
+  if (ESP.getFreeHeap() < 50000) {
+    logToFile("ERROR: Not enough heap!");
+    DEBUG_PRINTLN(F("BLE RSSI Scanner: ERROR - Not enough free heap for BLE!"));
+    enabled = false;
+    return;
+  }
+
   // Need to enable WiFi sleep for BLE+WiFi coexistence
+  // This is critical - BLE and WiFi share the 2.4GHz radio
   noWifiSleep = false;
+  logToFile("Set noWifiSleep = false");
+
+  // IMPORTANT: BLEDevice::init() can crash if called while WiFi is busy
+  // We need to ensure WiFi is in a safe state
+  logToFile("Putting WiFi into modem sleep mode...");
+  WiFi.setSleep(true);  // Enable WiFi sleep
+  delay(100);  // Give WiFi time to enter sleep mode
 
   // Initialize BLE with device name
-  BLEDevice::init(serverDescription);
+  logToFile("Calling NimBLEDevice::init()...");
+  DEBUG_PRINTLN(F("BLE RSSI Scanner: Calling NimBLEDevice::init()"));
+
+  // Use a simple device name to avoid issues
+  const char* bleName = "WLED-BLE";
+  NimBLEDevice::init(bleName);
+
+  logToFile("NimBLEDevice::init() completed");
+  DEBUG_PRINTLN(F("BLE RSSI Scanner: NimBLEDevice::init() completed"));
 
   // Setup advertising
-  pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180A)); // Device Information Service
+  logToFile("Getting advertising object...");
+  pAdvertising = NimBLEDevice::getAdvertising();
+  if (!pAdvertising) {
+    logToFile("ERROR: Failed to get advertising object");
+    DEBUG_PRINTLN(F("BLE RSSI Scanner: ERROR - Failed to get advertising object"));
+    enabled = false;
+    return;
+  }
+  logToFile("Got advertising object");
+
+  pAdvertising->addServiceUUID(NimBLEUUID((uint16_t)0x180A));
   pAdvertising->setScanResponse(true);
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
 
-  // Start advertising so other devices can find us
-  BLEDevice::startAdvertising();
+  logToFile("Starting advertising...");
+  pAdvertising->start();
+  logToFile("Advertising started");
   DEBUG_PRINTLN(F("BLE RSSI Scanner: Started advertising"));
 
   // Setup scanning
-  pBLEScan = BLEDevice::getScan();
+  logToFile("Getting scan object...");
+  pBLEScan = NimBLEDevice::getScan();
+  if (!pBLEScan) {
+    logToFile("ERROR: Failed to get scan object");
+    DEBUG_PRINTLN(F("BLE RSSI Scanner: ERROR - Failed to get scan object"));
+    enabled = false;
+    return;
+  }
+  logToFile("Got scan object");
+
   scanCallback = new ScanCallback(this);
   pBLEScan->setAdvertisedDeviceCallbacks(scanCallback);
   pBLEScan->setActiveScan(true);
-  pBLEScan->setInterval(100);
-  pBLEScan->setWindow(99);
+  pBLEScan->setInterval(100);  // 100ms
+  pBLEScan->setWindow(99);     // 99ms
+  pBLEScan->setDuplicateFilter(false);  // Allow duplicate advertisements (important for RSSI sampling)
 
   bleInitialized = true;
-  DEBUG_PRINTLN(F("BLE RSSI Scanner: BLE initialized"));
+  snprintf(heapMsg, sizeof(heapMsg), "BLE init SUCCESS. Free heap: %d bytes", ESP.getFreeHeap());
+  logToFile(heapMsg);
+  DEBUG_PRINTF_P(PSTR("BLE RSSI Scanner: BLE initialized. Free heap: %d bytes\n"), ESP.getFreeHeap());
 }
 
 void BLERSSIScannerUsermod::startScan() {
@@ -87,6 +183,7 @@ void BLERSSIScannerUsermod::startScan() {
   }
 
   if (scanInProgress) {
+    logToFile("Scan already in progress");
     DEBUG_PRINTLN(F("BLE RSSI Scanner: Scan already in progress"));
     return;
   }
@@ -97,8 +194,15 @@ void BLERSSIScannerUsermod::startScan() {
   scanInProgress = true;
   scanStartTime = millis();
 
-  // Start continuous scan
-  pBLEScan->start(0, nullptr, false);
+  logToFile("Starting BLE scan...");
+
+  // Start continuous scan (duration=0 means continuous until stop)
+  // Third parameter (is_continue) = false means clear previous results
+  bool started = pBLEScan->start(0, nullptr, false);
+
+  char msg[64];
+  snprintf(msg, sizeof(msg), "Scan started: %s (duration=%ds)", started ? "SUCCESS" : "FAILED", scanDurationSec);
+  logToFile(msg);
 
   DEBUG_PRINTF_P(PSTR("BLE RSSI Scanner: Started %d second scan\n"), scanDurationSec);
 }
@@ -109,11 +213,19 @@ void BLERSSIScannerUsermod::stopScan() {
   pBLEScan->stop();
   scanInProgress = false;
 
+  char msg[64];
+  snprintf(msg, sizeof(msg), "Scan stopped. Devices found: %d", rssiSamples.size());
+  logToFile(msg);
+
   DEBUG_PRINTLN(F("BLE RSSI Scanner: Stopped scan"));
 }
 
 String BLERSSIScannerUsermod::getResultsJSON() {
   DynamicJsonDocument doc(4096);
+
+  doc["status"] = "complete";
+  doc["scan_duration_sec"] = scanDurationSec;
+
   JsonArray devices = doc.createNestedArray("devices");
 
   // Calculate average RSSI for each device
@@ -136,8 +248,6 @@ String BLERSSIScannerUsermod::getResultsJSON() {
     device["sample_count"] = samples.size();
   }
 
-  // Add metadata
-  doc["scan_duration_sec"] = scanDurationSec;
   doc["device_count"] = devices.size();
 
   String output;
@@ -148,8 +258,9 @@ String BLERSSIScannerUsermod::getResultsJSON() {
 void BLERSSIScannerUsermod::registerHTTPHandler() {
   DEBUG_PRINTLN(F("BLE RSSI Scanner: Registering HTTP handler"));
 
-  server.on("/api/ble-rssi-scan", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    DEBUG_PRINTLN(F("BLE RSSI Scanner: HTTP request received"));
+  // Endpoint 1: Start a new scan
+  server.on("/api/ble-rssi-start", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    DEBUG_PRINTLN(F("BLE RSSI Scanner: Start scan request"));
 
     // Check for optional duration parameter
     if (request->hasParam("duration")) {
@@ -160,36 +271,82 @@ void BLERSSIScannerUsermod::registerHTTPHandler() {
       }
     }
 
-    // If scan is already complete, return results
-    if (!scanInProgress && !rssiSamples.empty()) {
-      String response = getResultsJSON();
-      request->send(200, "application/json", response);
+    // Check if scan is already in progress
+    if (scanInProgress) {
+      DynamicJsonDocument doc(256);
+      doc["status"] = "already_scanning";
+      doc["message"] = "Scan already in progress";
+
+      String output;
+      serializeJson(doc, output);
+      request->send(409, "application/json", output); // 409 Conflict
       return;
     }
 
     // Start new scan
     startScan();
 
-    // Return immediate response indicating scan started
+    // Return immediate response
     DynamicJsonDocument doc(256);
-    doc["status"] = "scanning";
+    doc["status"] = "started";
     doc["duration_sec"] = scanDurationSec;
-    doc["message"] = "BLE scan started. Call this endpoint again after " +
-                     String(scanDurationSec) + " seconds to get results.";
+    doc["message"] = "BLE scan started. Call /api/ble-rssi-results after " +
+                     String(scanDurationSec) + " seconds.";
 
     String output;
     serializeJson(doc, output);
-    request->send(202, "application/json", output);
+    request->send(200, "application/json", output);
   });
 
+  // Endpoint 2: Get scan results or status
   server.on("/api/ble-rssi-results", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    if (rssiSamples.empty()) {
-      request->send(404, "application/json", "{\"error\":\"No scan data available\"}");
+    DEBUG_PRINTLN(F("BLE RSSI Scanner: Results request"));
+
+    // If still scanning
+    if (scanInProgress) {
+      uint32_t elapsed = (millis() - scanStartTime) / 1000;
+      uint32_t remaining = scanDurationSec > elapsed ? scanDurationSec - elapsed : 0;
+
+      DynamicJsonDocument doc(256);
+      doc["status"] = "scanning";
+      doc["elapsed_sec"] = elapsed;
+      doc["remaining_sec"] = remaining;
+      doc["devices_found"] = rssiSamples.size();
+
+      String output;
+      serializeJson(doc, output);
+      request->send(200, "application/json", output);
       return;
     }
 
+    // If no scan has been done yet
+    if (rssiSamples.empty()) {
+      DynamicJsonDocument doc(128);
+      doc["status"] = "no_data";
+      doc["message"] = "No scan data available. Call /api/ble-rssi-start first.";
+
+      String output;
+      serializeJson(doc, output);
+      request->send(200, "application/json", output);
+      return;
+    }
+
+    // Scan complete, return results
     String response = getResultsJSON();
     request->send(200, "application/json", response);
+  });
+
+  // Endpoint 3: Get debug log
+  server.on("/api/ble-rssi-log", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    String log = getLogContents();
+    request->send(200, "text/plain", log);
+  });
+
+  // Endpoint 4: Clear debug log
+  server.on("/api/ble-rssi-log-clear", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    LittleFS.remove(LOG_FILE);
+    logToFile("Log cleared");
+    request->send(200, "text/plain", "Log cleared");
   });
 }
 
@@ -211,6 +368,7 @@ void BLERSSIScannerUsermod::setup() {
 
 void BLERSSIScannerUsermod::connected() {
   if (!enabled) return;
+  DEBUG_PRINTLN(F("BLE RSSI Scanner: connected() - registering HTTP handlers"));
   registerHTTPHandler();
 }
 
