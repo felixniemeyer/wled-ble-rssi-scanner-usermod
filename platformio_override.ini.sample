@@ -1,0 +1,47 @@
+# Sample PlatformIO configuration for BLE RSSI Scanner usermod
+#
+# Copy the relevant section to your platformio_override.ini file
+# and adjust as needed for your specific board.
+
+# ------------------------------------------------------------------------------
+# ESP32 Dev Board Example
+# ------------------------------------------------------------------------------
+[env:esp32dev_ble_rssi]
+extends = env:esp32dev
+build_flags = ${common.build_flags} ${esp32.build_flags}
+  -D USERMOD_BLE_RSSI_SCANNER          # Enable the BLE RSSI Scanner usermod
+  # Optional: customize scan duration (default is 15 seconds)
+  # -D BLE_RSSI_SCAN_DURATION_SEC=20
+lib_deps = ${esp32.lib_deps}
+  ESP32 BLE Arduino                     # Required BLE library
+
+# ------------------------------------------------------------------------------
+# ESP32-S3 Dev Board Example
+# ------------------------------------------------------------------------------
+[env:esp32s3dev_ble_rssi]
+extends = env:esp32s3dev_8MB
+platform = ${esp32s3.platform}
+build_flags = ${common.build_flags} ${esp32s3.build_flags}
+  -D USERMOD_BLE_RSSI_SCANNER
+  # -D BLE_RSSI_SCAN_DURATION_SEC=15
+lib_deps = ${esp32s3.lib_deps}
+  ESP32 BLE Arduino
+
+# ------------------------------------------------------------------------------
+# ESP32-C3 Dev Board Example
+# ------------------------------------------------------------------------------
+[env:esp32c3dev_ble_rssi]
+extends = env:esp32c3dev
+build_flags = ${common.build_flags} ${esp32c3.build_flags}
+  -D USERMOD_BLE_RSSI_SCANNER
+lib_deps = ${esp32c3.lib_deps}
+  ESP32 BLE Arduino
+
+# ------------------------------------------------------------------------------
+# Configuration Options
+# ------------------------------------------------------------------------------
+# -D USERMOD_BLE_RSSI_SCANNER           Enable this usermod (required)
+# -D BLE_RSSI_SCAN_DURATION_SEC=X       Default scan duration in seconds (1-300, default: 15)
+#
+# Note: ESP32-S2 does NOT support BLE and cannot use this usermod
+# Note: ESP8266 does NOT support BLE and cannot use this usermod

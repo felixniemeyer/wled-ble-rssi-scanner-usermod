@@ -1,0 +1,21 @@
+{
+  "name": "BLE RSSI Scanner",
+  "version": "1.0.0",
+  "description": "BLE RSSI measurement usermod for relative position estimation",
+  "authors": [
+    {
+      "name": "WLED Community"
+    }
+  ],
+  "keywords": ["ble", "bluetooth", "rssi", "positioning", "esp32"],
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "export": {
+    "include": [
+      "usermod_ble_rssi_scanner.h"
+    ]
+  },
+  "build": {
+    "libArchive": false
+  }
+}
