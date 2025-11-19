@@ -27,21 +27,28 @@ public:
       return;
     }
 
-    // Log device info even without name
-    std::string deviceName = advertisedDevice->haveName() ?
-                             advertisedDevice->getName() :
-                             std::string("NO_NAME_") + advertisedDevice->getAddress().toString();
+    // Get MAC address (always available)
+    std::string address = advertisedDevice->getAddress().toString();
     int rssi = advertisedDevice->getRSSI();
 
-    snprintf(msg, sizeof(msg), "  -> Device: %s, RSSI: %d, hasName: %d",
-             deviceName.c_str(), rssi, advertisedDevice->haveName());
+    // Get name (optional)
+    std::string name = advertisedDevice->haveName() ?
+                       advertisedDevice->getName() : "";
+
+    snprintf(msg, sizeof(msg), "  -> MAC: %s, Name: %s, RSSI: %d",
+             address.c_str(), name.empty() ? "(none)" : name.c_str(), rssi);
     parent->logToFile(msg);
 
-    // Store RSSI sample (now includes devices without names for debugging)
-    parent->rssiSamples[deviceName].push_back(rssi);
+    // Store or update device info
+    auto& device = parent->devices[address];
+    device.address = address;
+    if (!name.empty()) {
+      device.name = name;  // Update name if available
+    }
+    device.rssiSamples.push_back(rssi);
 
-    DEBUG_PRINTF_P(PSTR("BLE RSSI: Found device '%s' with RSSI: %d\n"),
-                   deviceName.c_str(), rssi);
+    DEBUG_PRINTF_P(PSTR("BLE RSSI: Found device '%s' (%s) with RSSI: %d\n"),
+                   address.c_str(), name.c_str(), rssi);
   }
 };
 
@@ -171,6 +178,11 @@ void BLERSSIScannerUsermod::initBLE() {
   pBLEScan->setWindow(99);     // 99ms
   pBLEScan->setDuplicateFilter(false);  // Allow duplicate advertisements (important for RSSI sampling)
 
+  // Store our own MAC address
+  ownMacAddress = NimBLEDevice::getAddress().toString();
+  snprintf(heapMsg, sizeof(heapMsg), "Own MAC address: %s", ownMacAddress.c_str());
+  logToFile(heapMsg);
+
   bleInitialized = true;
   snprintf(heapMsg, sizeof(heapMsg), "BLE init SUCCESS. Free heap: %d bytes", ESP.getFreeHeap());
   logToFile(heapMsg);
@@ -189,7 +201,7 @@ void BLERSSIScannerUsermod::startScan() {
   }
 
   // Clear previous samples
-  rssiSamples.clear();
+  devices.clear();
 
   scanInProgress = true;
   scanStartTime = millis();
@@ -214,7 +226,7 @@ void BLERSSIScannerUsermod::stopScan() {
   scanInProgress = false;
 
   char msg[64];
-  snprintf(msg, sizeof(msg), "Scan stopped. Devices found: %d", rssiSamples.size());
+  snprintf(msg, sizeof(msg), "Scan stopped. Devices found: %d", devices.size());
   logToFile(msg);
 
   DEBUG_PRINTLN(F("BLE RSSI Scanner: Stopped scan"));
@@ -226,12 +238,17 @@ String BLERSSIScannerUsermod::getResultsJSON() {
   doc["status"] = "complete";
   doc["scan_duration_sec"] = scanDurationSec;
 
-  JsonArray devices = doc.createNestedArray("devices");
+  // Add reporter's own MAC address (stored during BLE init)
+  if (!ownMacAddress.empty()) {
+    doc["reporter_mac"] = ownMacAddress.c_str();
+  }
+
+  JsonArray devicesArray = doc.createNestedArray("devices");
 
   // Calculate average RSSI for each device
-  for (const auto& entry : rssiSamples) {
-    const std::string& deviceName = entry.first;
-    const std::vector<int>& samples = entry.second;
+  for (const auto& entry : devices) {
+    const DeviceInfo& deviceInfo = entry.second;
+    const std::vector<int>& samples = deviceInfo.rssiSamples;
 
     if (samples.empty()) continue;
 
@@ -242,13 +259,16 @@ String BLERSSIScannerUsermod::getResultsJSON() {
     }
     float avg = (float)sum / samples.size();
 
-    JsonObject device = devices.createNestedObject();
-    device["name"] = deviceName;
+    JsonObject device = devicesArray.createNestedObject();
+    device["mac"] = deviceInfo.address.c_str();  // Always include MAC
+    if (!deviceInfo.name.empty()) {
+      device["name"] = deviceInfo.name.c_str();  // Optional name
+    }
     device["rssi_avg"] = avg;
     device["sample_count"] = samples.size();
   }
 
-  doc["device_count"] = devices.size();
+  doc["device_count"] = devicesArray.size();
 
   String output;
   serializeJson(doc, output);
@@ -311,7 +331,7 @@ void BLERSSIScannerUsermod::registerHTTPHandler() {
       doc["status"] = "scanning";
       doc["elapsed_sec"] = elapsed;
       doc["remaining_sec"] = remaining;
-      doc["devices_found"] = rssiSamples.size();
+      doc["devices_found"] = devices.size();
 
       String output;
       serializeJson(doc, output);
@@ -320,7 +340,7 @@ void BLERSSIScannerUsermod::registerHTTPHandler() {
     }
 
     // If no scan has been done yet
-    if (rssiSamples.empty()) {
+    if (devices.empty()) {
       DynamicJsonDocument doc(128);
       doc["status"] = "no_data";
       doc["message"] = "No scan data available. Call /api/ble-rssi-start first.";
@@ -391,8 +411,8 @@ void BLERSSIScannerUsermod::addToJsonInfo(JsonObject& root) {
   if (enabled) {
     if (scanInProgress) {
       infoArr.add(F("Scanning..."));
-    } else if (!rssiSamples.empty()) {
-      infoArr.add(String(rssiSamples.size()) + " devices found");
+    } else if (!devices.empty()) {
+      infoArr.add(String(devices.size()) + " devices found");
     } else {
       infoArr.add(F("Ready"));
     }

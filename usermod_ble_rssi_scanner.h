@@ -23,12 +23,18 @@ private:
   bool scanInProgress;
   uint32_t scanStartTime;
   uint32_t scanDurationSec;
+  std::string ownMacAddress;  // Store our own MAC address
 
   NimBLEScan* pBLEScan;
   NimBLEAdvertising* pAdvertising;
 
-  // Store RSSI samples: device name -> vector of RSSI values
-  std::map<std::string, std::vector<int>> rssiSamples;
+  // Store device info and RSSI samples
+  struct DeviceInfo {
+    std::string address;  // MAC address (required)
+    std::string name;     // Device name (optional, empty if no name)
+    std::vector<int> rssiSamples;
+  };
+  std::map<std::string, DeviceInfo> devices;  // key = MAC address
 
   // Forward declaration
   class ScanCallback;

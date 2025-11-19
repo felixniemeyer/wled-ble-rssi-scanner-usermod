@@ -130,21 +130,24 @@ Gets the current scan status and results.
 {
   "status": "complete",
   "scan_duration_sec": 10,
+  "reporter_mac": "aa:bb:cc:dd:ee:ff",
   "device_count": 2,
   "devices": [
     {
+      "mac": "11:22:33:44:55:66",
       "name": "WLED-Device1",
       "rssi_avg": -65.4,
       "sample_count": 142
     },
     {
-      "name": "WLED-Device2",
+      "mac": "77:88:99:aa:bb:cc",
       "rssi_avg": -78.2,
       "sample_count": 98
     }
   ]
 }
 ```
+**Note:** `name` field is optional and only present if the device advertises a name.
 
 **Response (No Data - HTTP 200):**
 ```json
@@ -211,7 +214,7 @@ devices = [
 # Start scans on all devices
 duration = 15
 for device in devices:
-    response = requests.get(f"{device}/api/ble-rssi-scan?duration={duration}")
+    response = requests.get(f"{device}/api/ble-rssi-start?duration={duration}")
     print(f"Started scan on {device}: {response.json()}")
 
 # Wait for scan to complete
@@ -221,10 +224,12 @@ time.sleep(duration + 2)  # Add 2 seconds buffer
 results = {}
 for device in devices:
     response = requests.get(f"{device}/api/ble-rssi-results")
-    results[device] = response.json()
-    print(f"Results from {device}:")
-    for found_device in results[device]["devices"]:
-        print(f"  {found_device['name']}: {found_device['rssi_avg']} dBm")
+    data = response.json()
+    results[device] = data
+    print(f"Results from {data['reporter_mac']}:")
+    for found_device in data["devices"]:
+        name = found_device.get('name', 'unnamed')
+        print(f"  {found_device['mac']} ({name}): {found_device['rssi_avg']} dBm")
 ```
 
 ## Technical Details
@@ -238,7 +243,9 @@ for device in devices:
 
 ### Device Identification
 
-Devices are identified by their **advertised BLE name**, which corresponds to WLED's `serverDescription` setting (default: "WLED-" + chip ID).
+Devices are identified by their **MAC address** (always present). The **BLE advertised name** is included if available, which typically corresponds to WLED's `serverDescription` setting (default: "WLED-" + chip ID).
+
+Each scan result includes the `reporter_mac` field, which is the MAC address of the device that performed the scan.
 
 ### RSSI Averaging
 
